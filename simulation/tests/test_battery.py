@@ -60,8 +60,37 @@ def test_soc_stays_within_bounds_over_many_steps():
         dict(capacity_kwh=10, max_power_kw=0, soc_kwh=5),
         dict(capacity_kwh=10, max_power_kw=5, soc_kwh=11),
         dict(capacity_kwh=10, max_power_kw=5, soc_kwh=5, charge_efficiency=1.2),
+        dict(capacity_kwh=10, max_power_kw=5, soc_kwh=5, min_soc_kwh=-1),
+        dict(capacity_kwh=10, max_power_kw=5, soc_kwh=5, min_soc_kwh=10),
     ],
 )
 def test_invalid_parameters_rejected(kwargs):
     with pytest.raises(ValidationError):
         Battery("b1", **kwargs)
+
+
+def test_reserve_limits_discharge_to_usable_energy():
+    # 5 kWh stored, 2 kWh reserve: 3 kWh usable. Asked for 8 kW, power limit 5 kW.
+    b = Battery("b1", capacity_kwh=10, max_power_kw=5, soc_kwh=5, min_soc_kwh=2)
+    b.setpoint_kw = 8.0
+    assert b.run_for(minutes=SLOT) == pytest.approx(5.0)  # power limit, not reserve, binds
+    # Only 1 kWh usable: at most 1 * 0.95 / 0.25 = 3.8 kW.
+    low = Battery("b2", capacity_kwh=10, max_power_kw=5, soc_kwh=3, min_soc_kwh=2)
+    low.setpoint_kw = 8.0
+    assert low.run_for(minutes=SLOT) == pytest.approx(3.8)
+    assert low.soc_kwh == pytest.approx(2.0)
+
+
+def test_battery_never_discharges_into_its_reserve():
+    b = Battery("b1", capacity_kwh=10, max_power_kw=5, soc_kwh=2, min_soc_kwh=2)
+    b.setpoint_kw = 4.0
+    assert b.run_for(minutes=SLOT) == 0.0
+    assert b.soc_kwh == 2.0
+
+
+def test_battery_below_reserve_can_still_charge():
+    b = Battery("b1", capacity_kwh=10, max_power_kw=5, soc_kwh=1, min_soc_kwh=2)
+    b.setpoint_kw = 4.0
+    assert b.run_for(minutes=SLOT) == 0.0  # cannot discharge
+    b.setpoint_kw = -4.0
+    assert b.run_for(minutes=SLOT) == pytest.approx(-4.0)  # can charge
