@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vppsim"
+version = "0.1.0"
+description = "Reliability experiments for virtual power plant dispatch"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.setuptools.packages.find]
+include = ["vppsim*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "D"]
+ignore = ["D107", "D203", "D213"]  # D107: constructors need no summary; D203/D213 clash with D211/D212
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]  # test names describe the tests

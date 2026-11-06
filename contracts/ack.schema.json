@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ack",
+  "description": "A device's answer to a command.",
+  "type": "object",
+  "required": [
+    "command_id",
+    "device_id",
+    "version",
+    "accepted",
+    "reason"
+  ],
+  "properties": {
+    "command_id": {
+      "type": "string"
+    },
+    "device_id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "accepted": {
+      "type": "boolean"
+    },
+    "reason": {
+      "enum": [
+        "applied",
+        "duplicate",
+        "stale",
+        "conflict"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

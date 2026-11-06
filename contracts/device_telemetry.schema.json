@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DeviceTelemetry",
+  "description": "A device's report of its current state.",
+  "type": "object",
+  "required": ["device_id", "applied_version", "setpoint_kw", "delivered_kw"],
+  "properties": {
+    "device_id": {"type": "string"},
+    "applied_version": {"type": "integer", "minimum": 0},
+    "setpoint_kw": {"type": "number"},
+    "delivered_kw": {"type": "number"},
+    "soc_kwh": {"type": ["number", "null"]}
+  },
+  "additionalProperties": false
+}

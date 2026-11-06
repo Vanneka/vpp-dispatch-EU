@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Command",
+  "description": "Dispatch command from the VPP to one device. Positive setpoint = discharge. A changed instruction always gets a new, higher version; a retry re-sends exactly the same command (same command_id and version).",
+  "type": "object",
+  "required": [
+    "command_id",
+    "device_id",
+    "version",
+    "setpoint_kw"
+  ],
+  "properties": {
+    "command_id": {
+      "type": "string"
+    },
+    "device_id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "setpoint_kw": {
+      "type": "number"
+    }
+  },
+  "additionalProperties": false
+}
