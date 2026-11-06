@@ -15,6 +15,7 @@ Dispatchers and experiments in progress.
 ```
 contracts/   message formats shared by all components (JSON Schema)
 data/        German day-ahead price snapshot (see data/README.md)
+docs/        plain-language guides (start with docs/how-a-vpp-works.md)
 simulation/  Python simulation package `vppsim`, its tests and experiments
 ```
 

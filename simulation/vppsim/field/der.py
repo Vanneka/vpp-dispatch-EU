@@ -31,16 +31,16 @@ class DistributedEnergyResource(ABC):
         self.delivered_kw = 0.0  # what it actually delivered in the last step
 
     @abstractmethod
-    def available_power(self, dt_minutes: float) -> tuple[float, float]:
+    def available_power(self, *, minutes: float) -> tuple[float, float]:
         """Return how fast the device can charge and discharge right now.
 
         Returns (max charge kW, max discharge kW) that it can keep up for the
-        whole interval. Both numbers are zero or positive.
+        given number of minutes. Both numbers are zero or positive.
         """
 
     @abstractmethod
-    def step(self, dt_minutes: float) -> float:
-        """Run the device for one interval at its setpoint, as far as its limits allow.
+    def run_for(self, *, minutes: float) -> float:
+        """Run the device for the given minutes at its setpoint, as far as its limits allow.
 
         Returns the power it actually delivered, in kW.
         """

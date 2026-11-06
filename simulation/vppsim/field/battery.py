@@ -42,26 +42,26 @@ class Battery(DistributedEnergyResource):
         self.charge_efficiency = charge_efficiency
         self.discharge_efficiency = discharge_efficiency
 
-    def available_power(self, dt_minutes: float) -> tuple[float, float]:
-        """Return how fast the battery can charge and discharge for the next interval.
+    def available_power(self, *, minutes: float) -> tuple[float, float]:
+        """Return how fast the battery can charge and discharge for the given minutes.
 
         Each direction is limited by the power limit and by how much energy is
         stored (to discharge) or how much room is left (to charge).
         """
-        hours = dt_minutes / 60
+        hours = minutes / 60
         max_discharge = min(self.max_power_kw, self.soc_kwh * self.discharge_efficiency / hours)
         headroom_kwh = self.capacity_kwh - self.soc_kwh
         max_charge = min(self.max_power_kw, headroom_kwh / (self.charge_efficiency * hours))
         return max_charge, max_discharge
 
-    def step(self, dt_minutes: float) -> float:
-        """Charge or discharge for one interval and update the stored energy.
+    def run_for(self, *, minutes: float) -> float:
+        """Charge or discharge for the given minutes and update the stored energy.
 
         Follows the setpoint but never goes past the limits. Returns the power
         actually delivered, in kW.
         """
-        hours = dt_minutes / 60
-        max_charge, max_discharge = self.available_power(dt_minutes)
+        hours = minutes / 60
+        max_charge, max_discharge = self.available_power(minutes=minutes)
         if self.setpoint_kw >= 0:
             delivered = min(self.setpoint_kw, max_discharge)
             self.soc_kwh -= delivered * hours / self.discharge_efficiency

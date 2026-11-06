@@ -71,7 +71,7 @@ def test_device_keeps_last_setpoint_until_a_newer_command_arrives():
     unit = make_unit()
     unit.handle_command(Command("c1", "b1", 1, 2.0))
     for _ in range(3):  # no new commands for three intervals, e.g. because they were lost
-        assert unit.der.step(15) == pytest.approx(2.0)
+        assert unit.der.run_for(minutes=15) == pytest.approx(2.0)
 
 
 def test_command_for_other_device_is_a_routing_error():
@@ -82,7 +82,7 @@ def test_command_for_other_device_is_a_routing_error():
 def test_telemetry_reports_device_state():
     unit = make_unit()
     unit.handle_command(Command("c1", "b1", 1, 4.0))
-    unit.der.step(15)
+    unit.der.run_for(minutes=15)
     t = unit.telemetry()
     assert t.applied_version == 1 and t.delivered_kw == 4.0
     assert t.soc_kwh == pytest.approx(unit.der.soc_kwh)
