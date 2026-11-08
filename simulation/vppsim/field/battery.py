@@ -6,6 +6,32 @@ from vppsim.errors import fail_validation_if
 from vppsim.field.der import DistributedEnergyResource
 
 
+def available_power_kw(
+    *,
+    soc_kwh: float,
+    capacity_kwh: float,
+    min_soc_kwh: float,
+    max_power_kw: float,
+    charge_efficiency: float,
+    discharge_efficiency: float,
+    minutes: float,
+) -> tuple[float, float]:
+    """Return (max charge kW, max discharge kW) a battery can keep up for the given minutes.
+
+    Each direction is limited by the power limit and by how much energy can be
+    used above the reserve (to discharge) or how much room is left (to charge).
+    The battery uses this with its real state; the VPP uses it with the last
+    state the battery reported. Sharing one function means the two can only
+    disagree because of old or missing reports.
+    """
+    hours = minutes / 60
+    usable_kwh = max(soc_kwh - min_soc_kwh, 0.0)
+    max_discharge = min(max_power_kw, usable_kwh * discharge_efficiency / hours)
+    headroom_kwh = capacity_kwh - soc_kwh
+    max_charge = min(max_power_kw, headroom_kwh / (charge_efficiency * hours))
+    return max_charge, max_discharge
+
+
 class Battery(DistributedEnergyResource):
     """A home battery that charges and discharges at the power level it is given.
 
@@ -49,18 +75,16 @@ class Battery(DistributedEnergyResource):
         self.min_soc_kwh = min_soc_kwh
 
     def available_power(self, *, minutes: float) -> tuple[float, float]:
-        """Return how fast the battery can charge and discharge for the given minutes.
-
-        Each direction is limited by the power limit and by how much energy can
-        be used above the reserve (to discharge) or how much room is left (to
-        charge).
-        """
-        hours = minutes / 60
-        usable_kwh = max(self.soc_kwh - self.min_soc_kwh, 0.0)
-        max_discharge = min(self.max_power_kw, usable_kwh * self.discharge_efficiency / hours)
-        headroom_kwh = self.capacity_kwh - self.soc_kwh
-        max_charge = min(self.max_power_kw, headroom_kwh / (self.charge_efficiency * hours))
-        return max_charge, max_discharge
+        """Return how fast the battery can charge and discharge for the given minutes."""
+        return available_power_kw(
+            soc_kwh=self.soc_kwh,
+            capacity_kwh=self.capacity_kwh,
+            min_soc_kwh=self.min_soc_kwh,
+            max_power_kw=self.max_power_kw,
+            charge_efficiency=self.charge_efficiency,
+            discharge_efficiency=self.discharge_efficiency,
+            minutes=minutes,
+        )
 
     def run_for(self, *, minutes: float) -> float:
         """Charge or discharge for the given minutes and update the stored energy.

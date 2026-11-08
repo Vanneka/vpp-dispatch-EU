@@ -12,3 +12,6 @@ venv/
 # Editors
 .vscode/
 .idea/
+
+# Local databases (Phase 2 SQLite runs)
+*.db

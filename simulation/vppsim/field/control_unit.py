@@ -17,9 +17,12 @@ from vppsim.messages import Ack, AckReason, Command, DeviceTelemetry
 class ControlUnit:
     """Connects one DER to the VPP and makes sure each command is applied only once.
 
-    It remembers just two things: the highest command version it has applied
-    and that command's ID. Because the VPP gives every new instruction a
-    higher version, that is enough to spot repeats and outdated commands.
+    Every command has a version number, and each new command from the VPP
+    has a higher number than the one before. The control unit remembers the
+    number and ID of the last command it applied. When a command arrives:
+    a higher number is new, so it is applied; a lower number is out of date,
+    so it is ignored; the same number and ID is a repeat, so it is not
+    applied again.
     """
 
     def __init__(self, der: DistributedEnergyResource) -> None:
