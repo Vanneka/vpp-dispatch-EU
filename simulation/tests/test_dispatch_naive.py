@@ -64,4 +64,4 @@ def test_acks_are_counted_but_cause_no_resend():
 
     broker.publish(ack_topic("b0"), Ack("b0-v1", "b0", 1, AckReason.APPLIED), step=1)
     broker.deliver(1)
-    assert dispatcher.acks_received == 1 and len(sent) == 1
+    assert dispatcher.stats.acks == 1 and len(sent) == 1

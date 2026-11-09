@@ -1,17 +1,20 @@
 """A commercial VPP: trade a battery fleet on day-ahead prices (buy cheap, sell expensive).
 
-The run takes any broker, so the same code tests a perfect network (the
-baseline) and a faulty one. main() runs the baseline: one day, a perfect
-network and the naive dispatcher.
+The run takes any broker and any dispatcher, so the same code compares the
+naive and reliable dispatchers on a perfect network (the baseline) and on a
+lossy one. With the same seed, both dispatchers face the same faults.
 
 Each step runs four phases, always in this order:
 1. the VPP plans, splits the fleet target and sends commands;
-2. the broker delivers the commands; control units apply them and reply;
+2. delivery rounds, one per send time of the dispatcher (0, 15, 45, ... s):
+   the broker delivers the commands, control units apply them and reply,
+   the broker delivers the replies, and the VPP re-sends what is unconfirmed;
 3. every battery runs for 15 minutes; control units send a report;
-4. the broker delivers the replies and reports to the VPP.
+4. the broker delivers the reports to the VPP.
 
-With a perfect network, every battery should deliver exactly what the VPP
-asked for, so the tracking error must be zero. Run it with:
+Batteries run per step, so a command confirmed at 105 s counts as followed
+for the whole step; the seconds show up only in the time to confirm.
+Run it with:
 
     python -m vppsim.experiments.commercial_vpp [path/to/smard.csv]
 """
@@ -19,22 +22,39 @@ asked for, so the tracking error must be zero. Run it with:
 from __future__ import annotations
 
 import math
+import statistics
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from vppsim.field.battery import Battery
 from vppsim.field.control_unit import ControlUnit
 from vppsim.market.prices import PricePoint, load_prices
+from vppsim.network.faulty_broker import FaultConfig, FaultyBroker
 from vppsim.network.in_memory_broker import InMemoryBroker
 from vppsim.network.message_broker import MessageBroker, ack_topic, command_topic, telemetry_topic
 from vppsim.vpp.dispatch_naive import NaiveDispatcher
+from vppsim.vpp.dispatch_reliable import ReliableDispatcher
+from vppsim.vpp.dispatcher import Dispatcher
 from vppsim.vpp.planner import DAY_STEPS, plan
 from vppsim.vpp.state_store import DeviceSpec, InMemoryStateStore, StateStore
 
 STEP_MINUTES = 15
 BATTERY_TYPES = [(5.0, 3.0), (10.0, 5.0), (13.5, 5.0)]  # (capacity kWh, max power kW)
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
+SEED = 1  # same seed for both dispatchers, so they face the same faults
+
+SCENARIOS: dict[str, Callable[[], MessageBroker]] = {
+    "perfect_network": InMemoryBroker,
+    "lossy_network": lambda: FaultyBroker(
+        SEED, down=FaultConfig(loss=0.1), up=FaultConfig(loss=0.1)
+    ),
+}
+DISPATCHERS: dict[str, Callable[[MessageBroker, StateStore], Dispatcher]] = {
+    "naive": lambda broker, store: NaiveDispatcher(broker, store, minutes=STEP_MINUTES),
+    "reliable": lambda broker, store: ReliableDispatcher(broker, store, minutes=STEP_MINUTES),
+}
 
 
 @dataclass(frozen=True)
@@ -97,14 +117,17 @@ def run(
     prices: list[PricePoint],
     broker: MessageBroker,
     store: StateStore,
+    dispatcher: Dispatcher,
     n_batteries: int = 100,
 ) -> list[StepResult]:
-    """Run the simulation over the given prices and return the totals for each step."""
+    """Run the simulation over the given prices and return the totals for each step.
+
+    The dispatcher must use the same broker and store.
+    """
     batteries = build_fleet(n_batteries)
     control_units = [ControlUnit(b) for b in batteries]
     for battery in batteries:
         store.enroll(spec_of(battery))
-    dispatcher = NaiveDispatcher(broker, store, minutes=STEP_MINUTES)
     for control_unit in control_units:
         connect(broker, control_unit)
     targets = plan(prices, fleet_power_kw=sum(b.max_power_kw for b in batteries))
@@ -117,7 +140,11 @@ def run(
     results = []
     for point, target_kw in zip(prices, targets):
         setpoints = dispatcher.dispatch(target_kw, point.step)  # 1
-        broker.deliver(point.step)  # 2
+        for time_s in dispatcher.try_times_s():  # 2
+            if time_s > 0 and dispatcher.resend(point.step, time_s) == 0:
+                break  # everything is confirmed
+            broker.deliver(point.step)  # commands reach the control units, which reply
+            broker.deliver(point.step)  # replies reach the VPP
         delivered = sum(b.run_for(minutes=STEP_MINUTES) for b in batteries)  # 3
         report_all(broker, control_units, point.step)
         broker.deliver(point.step)  # 4
@@ -132,29 +159,64 @@ def rmse(values: list[float]) -> float:
     return math.sqrt(sum(v * v for v in values) / len(values)) if values else 0.0
 
 
-def print_report(results: list[StepResult]) -> None:
-    """Print the active steps and a summary of planned, allocated and delivered energy."""
-    print(f"{'step':>4} {'€/MWh':>8} {'planned kW':>11} {'allocated kW':>13} {'delivered kW':>13}")
-    for r in results:
-        if r.planned_kw or r.allocated_kw or r.delivered_kw:
-            print(
-                f"{r.step:>4} {r.price_eur_per_mwh:>8.2f} {r.planned_kw:>11.1f}"
-                f" {r.allocated_kw:>13.1f} {r.delivered_kw:>13.1f}"
-            )
-    hours = STEP_MINUTES / 60
-    print()
-    for name, values in [
-        ("planned", [r.planned_kw for r in results]),
-        ("allocated", [r.allocated_kw for r in results]),
-        ("delivered", [r.delivered_kw for r in results]),
-    ]:
-        charged = -sum(v for v in values if v < 0) * hours
-        discharged = sum(v for v in values if v > 0) * hours
-        print(f"{name:>10}: charged {charged:7.1f} kWh, discharged {discharged:7.1f} kWh")
-    physics = rmse([r.planned_kw - r.allocated_kw for r in results])
-    tracking = rmse([r.allocated_kw - r.delivered_kw for r in results])
-    print(f"\nplan the batteries could not meet (RMSE): {physics:.2f} kW")
-    print(f"tracking error, allocated vs delivered (RMSE): {tracking:.4f} kW")
+@dataclass(frozen=True)
+class RunSummary:
+    """The numbers that compare one dispatcher on one network."""
+
+    scenario: str
+    dispatcher: str
+    tracking_kw: float  # RMSE of allocated minus delivered
+    physics_kw: float  # RMSE of planned minus allocated
+    published: int  # messages of every kind
+    commands: int
+    sends: int
+    confirmed: int
+    unnecessary_retries: int
+    median_confirm_s: float
+    p95_confirm_s: float
+
+
+def summarize(
+    scenario: str,
+    name: str,
+    results: list[StepResult],
+    dispatcher: Dispatcher,
+    broker: InMemoryBroker,
+) -> RunSummary:
+    """Return the comparison numbers for one finished run."""
+    stats = dispatcher.stats
+    times = sorted(stats.confirm_times_s) or [0.0]
+    return RunSummary(
+        scenario=scenario,
+        dispatcher=name,
+        tracking_kw=rmse([r.allocated_kw - r.delivered_kw for r in results]),
+        physics_kw=rmse([r.planned_kw - r.allocated_kw for r in results]),
+        published=broker.stats.published,
+        commands=stats.commands,
+        sends=stats.sends,
+        confirmed=stats.confirmed,
+        unnecessary_retries=stats.unnecessary_retries,
+        median_confirm_s=statistics.median(times),
+        p95_confirm_s=times[math.ceil(0.95 * len(times)) - 1],
+    )
+
+
+def print_comparison(rows: list[RunSummary]) -> None:
+    """Print one line per scenario and dispatcher."""
+    print(
+        f"{'scenario':<16} {'dispatcher':<10} {'tracking kW':>11} {'commands':>8}"
+        f" {'sends/cmd':>9} {'confirmed':>9} {'median s':>8} {'p95 s':>6}"
+        f" {'unneeded':>8} {'messages':>8}"
+    )
+    for r in rows:
+        confirmed = r.confirmed / r.commands if r.commands else 1.0
+        sends = r.sends / r.commands if r.commands else 0.0
+        print(
+            f"{r.scenario:<16} {r.dispatcher:<10} {r.tracking_kw:>11.2f} {r.commands:>8}"
+            f" {sends:>9.2f} {confirmed:>9.1%} {r.median_confirm_s:>8.0f}"
+            f" {r.p95_confirm_s:>6.0f} {r.unnecessary_retries:>8} {r.published:>8}"
+        )
+    print(f"\nplan the batteries could not meet (RMSE): {rows[0].physics_kw:.2f} kW")
 
 
 def default_price_file() -> Path:
@@ -166,12 +228,17 @@ def default_price_file() -> Path:
 
 
 def main() -> None:
-    """Run the baseline for the first day of prices and print the report."""
+    """Run every scenario with every dispatcher on the first day of prices and compare."""
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else default_price_file()
     prices = load_prices(path)[:DAY_STEPS]
-    broker = InMemoryBroker()
-    print_report(run(prices, broker, InMemoryStateStore()))
-    print(f"messages published: {broker.stats.published}")
+    rows = []
+    for scenario, make_broker in SCENARIOS.items():
+        for name, make_dispatcher in DISPATCHERS.items():
+            broker, store = make_broker(), InMemoryStateStore()
+            dispatcher = make_dispatcher(broker, store)
+            results = run(prices, broker, store, dispatcher)
+            rows.append(summarize(scenario, name, results, dispatcher, broker))
+    print_comparison(rows)
 
 
 if __name__ == "__main__":
