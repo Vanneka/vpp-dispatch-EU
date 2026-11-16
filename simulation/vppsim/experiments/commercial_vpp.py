@@ -24,7 +24,7 @@ from __future__ import annotations
 import math
 import statistics
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,14 +43,17 @@ from vppsim.vpp.state_store import DeviceSpec, InMemoryStateStore, StateStore
 STEP_MINUTES = 15
 BATTERY_TYPES = [(5.0, 3.0), (10.0, 5.0), (13.5, 5.0)]  # (capacity kWh, max power kW)
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
-SEED = 1  # same seed for both dispatchers, so they face the same faults
+SEEDS = range(1, 11)  # each seed is a different, repeatable pattern of lost messages
 
-SCENARIOS: dict[str, Callable[[], MessageBroker]] = {
-    "perfect_network": InMemoryBroker,
-    "lossy_network": lambda: FaultyBroker(
-        SEED, down=FaultConfig(loss=0.1), up=FaultConfig(loss=0.1)
+# Each scenario builds a broker from a seed. Both dispatchers get the same seed,
+# so they face the same faults.
+SCENARIOS: dict[str, Callable[[int], MessageBroker]] = {
+    "perfect_network": lambda seed: InMemoryBroker(),
+    "lossy_network": lambda seed: FaultyBroker(
+        seed, down=FaultConfig(loss=0.1), up=FaultConfig(loss=0.1)
     ),
 }
+NO_FAULTS = {"perfect_network"}  # nothing is lost here, so one seed is enough
 DISPATCHERS: dict[str, Callable[[MessageBroker, StateStore], Dispatcher]] = {
     "naive": lambda broker, store: NaiveDispatcher(broker, store, minutes=STEP_MINUTES),
     "reliable": lambda broker, store: ReliableDispatcher(broker, store, minutes=STEP_MINUTES),
@@ -165,6 +168,7 @@ class RunSummary:
 
     scenario: str
     dispatcher: str
+    seed: int
     tracking_kw: float  # RMSE of allocated minus delivered
     physics_kw: float  # RMSE of planned minus allocated
     published: int  # messages of every kind
@@ -179,6 +183,7 @@ class RunSummary:
 def summarize(
     scenario: str,
     name: str,
+    seed: int,
     results: list[StepResult],
     dispatcher: Dispatcher,
     broker: InMemoryBroker,
@@ -189,6 +194,7 @@ def summarize(
     return RunSummary(
         scenario=scenario,
         dispatcher=name,
+        seed=seed,
         tracking_kw=rmse([r.allocated_kw - r.delivered_kw for r in results]),
         physics_kw=rmse([r.planned_kw - r.allocated_kw for r in results]),
         published=broker.stats.published,
@@ -201,20 +207,51 @@ def summarize(
     )
 
 
+def compare(
+    prices: list[PricePoint], seeds: Sequence[int], n_batteries: int = 100
+) -> list[RunSummary]:
+    """Run every scenario with every dispatcher once per seed; return one summary per run.
+
+    A network without faults is run with the first seed only, since the
+    seed would change nothing there.
+    """
+    rows = []
+    for scenario, make_broker in SCENARIOS.items():
+        for seed in seeds[:1] if scenario in NO_FAULTS else seeds:
+            for name, make_dispatcher in DISPATCHERS.items():
+                broker, store = make_broker(seed), InMemoryStateStore()
+                dispatcher = make_dispatcher(broker, store)
+                results = run(prices, broker, store, dispatcher, n_batteries)
+                rows.append(summarize(scenario, name, seed, results, dispatcher, broker))
+    return rows
+
+
+def spread(values: list[float], fmt: str) -> str:
+    """Return the average of the values with their range, e.g. "2.90 (2.61-3.20)"."""
+    mean = statistics.fmean(values)
+    if min(values) == max(values):
+        return format(mean, fmt)
+    return f"{mean:{fmt}} ({min(values):{fmt}}-{max(values):{fmt}})"
+
+
 def print_comparison(rows: list[RunSummary]) -> None:
-    """Print one line per scenario and dispatcher."""
-    print(
-        f"{'scenario':<16} {'dispatcher':<10} {'tracking kW':>11} {'commands':>8}"
-        f" {'sends/cmd':>9} {'confirmed':>9} {'median s':>8} {'p95 s':>6}"
-        f" {'unneeded':>8} {'messages':>8}"
-    )
+    """Print one line per scenario and dispatcher: the average over its seeds, with the range."""
+    groups: dict[tuple[str, str], list[RunSummary]] = {}
     for r in rows:
-        confirmed = r.confirmed / r.commands if r.commands else 1.0
-        sends = r.sends / r.commands if r.commands else 0.0
+        groups.setdefault((r.scenario, r.dispatcher), []).append(r)
+    print(
+        f"{'scenario':<16} {'dispatcher':<10} {'runs':>4} {'tracking kW':>20}"
+        f" {'confirmed':>9} {'sends/cmd':>9} {'p95 s':>6} {'unneeded':>18}"
+    )
+    for (scenario, dispatcher), runs in groups.items():
+        confirmed = [r.confirmed / r.commands if r.commands else 1.0 for r in runs]
+        sends = [r.sends / r.commands if r.commands else 0.0 for r in runs]
         print(
-            f"{r.scenario:<16} {r.dispatcher:<10} {r.tracking_kw:>11.2f} {r.commands:>8}"
-            f" {sends:>9.2f} {confirmed:>9.1%} {r.median_confirm_s:>8.0f}"
-            f" {r.p95_confirm_s:>6.0f} {r.unnecessary_retries:>8} {r.published:>8}"
+            f"{scenario:<16} {dispatcher:<10} {len(runs):>4}"
+            f" {spread([r.tracking_kw for r in runs], '.2f'):>20}"
+            f" {statistics.fmean(confirmed):>9.1%} {statistics.fmean(sends):>9.2f}"
+            f" {statistics.fmean([r.p95_confirm_s for r in runs]):>6.0f}"
+            f" {spread([r.unnecessary_retries for r in runs], '.0f'):>18}"
         )
     print(f"\nplan the batteries could not meet (RMSE): {rows[0].physics_kw:.2f} kW")
 
@@ -228,17 +265,11 @@ def default_price_file() -> Path:
 
 
 def main() -> None:
-    """Run every scenario with every dispatcher on the first day of prices and compare."""
+    """Run every scenario with every dispatcher over all days of prices and every seed."""
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else default_price_file()
-    prices = load_prices(path)[:DAY_STEPS]
-    rows = []
-    for scenario, make_broker in SCENARIOS.items():
-        for name, make_dispatcher in DISPATCHERS.items():
-            broker, store = make_broker(), InMemoryStateStore()
-            dispatcher = make_dispatcher(broker, store)
-            results = run(prices, broker, store, dispatcher)
-            rows.append(summarize(scenario, name, results, dispatcher, broker))
-    print_comparison(rows)
+    prices = load_prices(path)
+    print(f"{len(prices) / DAY_STEPS:.1f} days of prices, {len(SEEDS)} seeds\n")
+    print_comparison(compare(prices, SEEDS))
 
 
 if __name__ == "__main__":

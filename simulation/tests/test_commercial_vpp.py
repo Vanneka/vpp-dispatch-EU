@@ -3,7 +3,7 @@
 import pytest
 
 from vppsim import FaultConfig, FaultyBroker, InMemoryBroker
-from vppsim.experiments.commercial_vpp import default_price_file, rmse, run
+from vppsim.experiments.commercial_vpp import compare, default_price_file, rmse, run
 from vppsim.market import load_prices
 from vppsim.vpp import DAY_STEPS, InMemoryStateStore, NaiveDispatcher, ReliableDispatcher
 
@@ -60,3 +60,35 @@ def test_reliable_dispatcher_confirms_every_command_at_ten_percent_loss():
     faults = {"down": FaultConfig(loss=0.1), "up": FaultConfig(loss=0.1)}
     _, dispatcher = simulate(ReliableDispatcher, FaultyBroker(1, **faults))
     assert dispatcher.stats.confirmed == dispatcher.stats.commands
+
+
+@pytest.fixture(scope="module")
+def three_seeds():
+    return compare(PRICES, [1, 2, 3], n_batteries=12)
+
+
+def runs(rows, scenario, dispatcher):
+    return [r for r in rows if r.scenario == scenario and r.dispatcher == dispatcher]
+
+
+def test_perfect_network_is_run_with_one_seed_only(three_seeds):
+    assert len(runs(three_seeds, "perfect_network", "naive")) == 1
+    assert len(runs(three_seeds, "lossy_network", "naive")) == 3
+
+
+def test_the_same_seed_gives_the_same_result(three_seeds):
+    again = compare(PRICES, [1], n_batteries=12)
+    first = runs(three_seeds, "lossy_network", "naive")[0]
+    assert runs(again, "lossy_network", "naive")[0] == first
+
+
+def test_different_seeds_lose_different_messages(three_seeds):
+    tracking = [r.tracking_kw for r in runs(three_seeds, "lossy_network", "naive")]
+    assert len(set(tracking)) == 3
+
+
+def test_reliable_beats_naive_for_every_seed(three_seeds):
+    naive = runs(three_seeds, "lossy_network", "naive")
+    reliable = runs(three_seeds, "lossy_network", "reliable")
+    assert all(r.tracking_kw < n.tracking_kw for n, r in zip(naive, reliable))
+    assert all(r.confirmed == r.commands for r in reliable)
