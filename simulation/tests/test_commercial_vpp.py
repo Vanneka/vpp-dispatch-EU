@@ -64,7 +64,7 @@ def test_reliable_dispatcher_confirms_every_command_at_ten_percent_loss():
 
 @pytest.fixture(scope="module")
 def three_seeds():
-    return compare(PRICES, [1, 2, 3], n_batteries=12)
+    return compare(PRICES, [1, 2, 3], n_batteries=12, workers=1)
 
 
 def runs(rows, scenario, dispatcher):
@@ -77,7 +77,7 @@ def test_perfect_network_is_run_with_one_seed_only(three_seeds):
 
 
 def test_the_same_seed_gives_the_same_result(three_seeds):
-    again = compare(PRICES, [1], n_batteries=12)
+    again = compare(PRICES, [1], n_batteries=12)  # side by side this time
     first = runs(three_seeds, "lossy_network", "naive")[0]
     assert runs(again, "lossy_network", "naive")[0] == first
 
@@ -92,3 +92,7 @@ def test_reliable_beats_naive_for_every_seed(three_seeds):
     reliable = runs(three_seeds, "lossy_network", "reliable")
     assert all(r.tracking_kw < n.tracking_kw for n, r in zip(naive, reliable))
     assert all(r.confirmed == r.commands for r in reliable)
+
+
+def test_parallel_and_one_by_one_give_the_same_rows(three_seeds):
+    assert compare(PRICES, [1, 2, 3], n_batteries=12, workers=2) == three_seeds

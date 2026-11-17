@@ -25,6 +25,7 @@ import math
 import statistics
 import sys
 from collections.abc import Callable, Sequence
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -207,23 +208,41 @@ def summarize(
     )
 
 
+def run_one(job: tuple[str, str, int, list[PricePoint], int]) -> RunSummary:
+    """Run one scenario with one dispatcher and one seed, and summarize it.
+
+    Takes everything in one tuple so that it can be handed to another process.
+    """
+    scenario, name, seed, prices, n_batteries = job
+    broker, store = SCENARIOS[scenario](seed), InMemoryStateStore()
+    dispatcher = DISPATCHERS[name](broker, store)
+    results = run(prices, broker, store, dispatcher, n_batteries)
+    return summarize(scenario, name, seed, results, dispatcher, broker)
+
+
 def compare(
-    prices: list[PricePoint], seeds: Sequence[int], n_batteries: int = 100
+    prices: list[PricePoint],
+    seeds: Sequence[int],
+    n_batteries: int = 100,
+    workers: int | None = None,
 ) -> list[RunSummary]:
     """Run every scenario with every dispatcher once per seed; return one summary per run.
 
     A network without faults is run with the first seed only, since the
-    seed would change nothing there.
+    seed would change nothing there. The runs do not depend on each other,
+    so they run side by side on all processor cores (`workers=None`), or one
+    after another with `workers=1`. The results are the same either way.
     """
-    rows = []
-    for scenario, make_broker in SCENARIOS.items():
-        for seed in seeds[:1] if scenario in NO_FAULTS else seeds:
-            for name, make_dispatcher in DISPATCHERS.items():
-                broker, store = make_broker(seed), InMemoryStateStore()
-                dispatcher = make_dispatcher(broker, store)
-                results = run(prices, broker, store, dispatcher, n_batteries)
-                rows.append(summarize(scenario, name, seed, results, dispatcher, broker))
-    return rows
+    jobs = [
+        (scenario, name, seed, prices, n_batteries)
+        for scenario in SCENARIOS
+        for seed in (seeds[:1] if scenario in NO_FAULTS else seeds)
+        for name in DISPATCHERS
+    ]
+    if workers == 1:
+        return [run_one(job) for job in jobs]
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(run_one, jobs))  # map keeps the jobs' order
 
 
 def spread(values: list[float], fmt: str) -> str:
