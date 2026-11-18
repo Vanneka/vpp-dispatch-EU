@@ -82,7 +82,7 @@ class ReliableDispatcher(Dispatcher):
         ack = envelope.payload
         self.stats.acks += 1
         if ack.reason == AckReason.DUPLICATE:
-            self.stats.unnecessary_retries += 1
+            self.stats.duplicate_replies += 1
         pending = self._pending.get(ack.device_id)
         if pending is None or pending.command_id != ack.command_id:
             return  # a late reply for a command already confirmed or replaced

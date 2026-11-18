@@ -17,7 +17,7 @@ class DispatchStats:
     sends: int = 0  # copies sent, retries included
     acks: int = 0  # replies received, of any kind
     confirmed: int = 0  # commands the VPP knows were applied
-    unnecessary_retries: int = 0  # DUPLICATE replies: a copy reached a device that had it already
+    duplicate_replies: int = 0  # a copy reached a device that had it already (retry or network)
     confirm_times_s: list[float] = field(default_factory=list)  # first send to confirmation
 
 

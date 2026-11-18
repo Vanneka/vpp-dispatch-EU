@@ -52,13 +52,13 @@ def test_time_to_confirm_counts_from_the_first_send():
     assert dispatcher.stats.confirm_times_s == [15.0]
 
 
-def test_duplicate_reply_confirms_and_counts_an_unnecessary_retry():
+def test_duplicate_reply_confirms_and_is_counted():
     broker, dispatcher, _ = setup(n=1)
     dispatcher.dispatch(4.0, step=1)
     dispatcher.resend(1, 15)
     reply(broker, "b0-v1", AckReason.DUPLICATE)
     assert dispatcher.stats.confirmed == 1
-    assert dispatcher.stats.unnecessary_retries == 1
+    assert dispatcher.stats.duplicate_replies == 1
     assert dispatcher.resend(1, 45) == 0
 
 

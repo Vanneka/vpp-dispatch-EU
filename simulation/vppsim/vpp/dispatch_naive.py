@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from vppsim.messages import Command
+from vppsim.messages import AckReason, Command
 from vppsim.network.message_broker import Envelope, MessageBroker, command_topic
 from vppsim.vpp.allocator import allocate
 from vppsim.vpp.dispatcher import Dispatcher
@@ -53,6 +53,8 @@ class NaiveDispatcher(Dispatcher):
         """Count a reply; the naive dispatcher does nothing else with it."""
         ack = envelope.payload
         self.stats.acks += 1
+        if ack.reason == AckReason.DUPLICATE:
+            self.stats.duplicate_replies += 1  # the network delivered a command twice
         if ack.accepted and ack.command_id not in self._confirmed:
             self._confirmed.add(ack.command_id)
             self.stats.confirmed += 1

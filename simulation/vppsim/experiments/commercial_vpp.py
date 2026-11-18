@@ -53,6 +53,14 @@ SCENARIOS: dict[str, Callable[[int], MessageBroker]] = {
     "lossy_network": lambda seed: FaultyBroker(
         seed, down=FaultConfig(loss=0.1), up=FaultConfig(loss=0.1)
     ),
+    "duplicating_network": lambda seed: FaultyBroker(
+        seed, down=FaultConfig(duplicate=0.1), up=FaultConfig(duplicate=0.1)
+    ),
+    "lossy_duplicating": lambda seed: FaultyBroker(
+        seed,
+        down=FaultConfig(loss=0.1, duplicate=0.1),
+        up=FaultConfig(loss=0.1, duplicate=0.1),
+    ),
 }
 NO_FAULTS = {"perfect_network"}  # nothing is lost here, so one seed is enough
 DISPATCHERS: dict[str, Callable[[MessageBroker, StateStore], Dispatcher]] = {
@@ -176,7 +184,7 @@ class RunSummary:
     commands: int
     sends: int
     confirmed: int
-    unnecessary_retries: int
+    duplicate_replies: int  # copies that reached a battery that already had the command
     median_confirm_s: float
     p95_confirm_s: float
 
@@ -202,7 +210,7 @@ def summarize(
         commands=stats.commands,
         sends=stats.sends,
         confirmed=stats.confirmed,
-        unnecessary_retries=stats.unnecessary_retries,
+        duplicate_replies=stats.duplicate_replies,
         median_confirm_s=statistics.median(times),
         p95_confirm_s=times[math.ceil(0.95 * len(times)) - 1],
     )
@@ -259,18 +267,18 @@ def print_comparison(rows: list[RunSummary]) -> None:
     for r in rows:
         groups.setdefault((r.scenario, r.dispatcher), []).append(r)
     print(
-        f"{'scenario':<16} {'dispatcher':<10} {'runs':>4} {'tracking kW':>20}"
-        f" {'confirmed':>9} {'sends/cmd':>9} {'p95 s':>6} {'unneeded':>18}"
+        f"{'scenario':<20} {'dispatcher':<10} {'runs':>4} {'tracking kW':>20}"
+        f" {'confirmed':>9} {'sends/cmd':>9} {'p95 s':>6} {'duplicate replies':>18}"
     )
     for (scenario, dispatcher), runs in groups.items():
         confirmed = [r.confirmed / r.commands if r.commands else 1.0 for r in runs]
         sends = [r.sends / r.commands if r.commands else 0.0 for r in runs]
         print(
-            f"{scenario:<16} {dispatcher:<10} {len(runs):>4}"
+            f"{scenario:<20} {dispatcher:<10} {len(runs):>4}"
             f" {spread([r.tracking_kw for r in runs], '.2f'):>20}"
             f" {statistics.fmean(confirmed):>9.1%} {statistics.fmean(sends):>9.2f}"
             f" {statistics.fmean([r.p95_confirm_s for r in runs]):>6.0f}"
-            f" {spread([r.unnecessary_retries for r in runs], '.0f'):>18}"
+            f" {spread([r.duplicate_replies for r in runs], '.0f'):>18}"
         )
     print(f"\nplan the batteries could not meet (RMSE): {rows[0].physics_kw:.2f} kW")
 

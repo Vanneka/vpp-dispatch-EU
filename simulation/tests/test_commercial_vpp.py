@@ -96,3 +96,18 @@ def test_reliable_beats_naive_for_every_seed(three_seeds):
 
 def test_parallel_and_one_by_one_give_the_same_rows(three_seeds):
     assert compare(PRICES, [1, 2, 3], n_batteries=12, workers=2) == three_seeds
+
+
+@pytest.mark.parametrize("dispatcher_class", [NaiveDispatcher, ReliableDispatcher])
+def test_repeated_messages_alone_cause_no_tracking_error(dispatcher_class):
+    repeats = {"down": FaultConfig(duplicate=0.1), "up": FaultConfig(duplicate=0.1)}
+    results, dispatcher = simulate(dispatcher_class, FaultyBroker(1, **repeats))
+    assert dispatcher.stats.duplicate_replies > 0  # repeated commands did arrive ...
+    assert tracking(results) == pytest.approx(0, abs=1e-9)  # ... and were applied only once
+
+
+def test_reliable_beats_naive_when_messages_are_lost_and_repeated(three_seeds):
+    naive = runs(three_seeds, "lossy_duplicating", "naive")
+    reliable = runs(three_seeds, "lossy_duplicating", "reliable")
+    assert all(r.tracking_kw < n.tracking_kw for n, r in zip(naive, reliable))
+    assert all(r.confirmed == r.commands for r in reliable)

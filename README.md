@@ -14,6 +14,7 @@ A simulation of a **virtual power plant (VPP)** that trades 100 home batteries o
 | **Reliable: re-sends until confirmed** | **2.7 kW (2.2–3.1)** | **100%** | 1.24 |
 
 - **Retries cut the error by about 87%**, and the reliable dispatcher wins in every run. With only commands lost, its error is exactly zero.
+- **Repeated messages alone cause no error.** With 10% of messages arriving twice, both dispatchers track the plan exactly: the version number lets each battery spot the copy and apply it only once. Adding repeats to loss leaves both results unchanged.
 - **What is left comes from lost battery reports.** The VPP plans with an out-of-date state of charge, and no retry can fix that. State reconciliation, the next phase, targets this.
 
 *Tracking error* is the typical gap (RMSE) between what the VPP asked the batteries for and what they delivered.
@@ -41,8 +42,8 @@ flowchart LR
 cd simulation
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest                                        # 123 tests
-python -m vppsim.experiments.commercial_vpp   # the comparison above, about 2 minutes
+pytest                                        # 127 tests
+python -m vppsim.experiments.commercial_vpp   # the comparison above, a few minutes
 ```
 
 Code is in `simulation/vppsim` (field devices, network, VPP, experiments). Message formats are in `contracts/`, and the price data in `data/`. Power is in kW: positive means discharging to the grid.
